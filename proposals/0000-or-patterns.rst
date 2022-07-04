@@ -1,7 +1,7 @@
 Or Patterns
 ==============
 
-.. author:: Ömer Sinan Ağacan, Sebastian Graf, David Knothe
+.. author:: David Knothe, Ömer Sinan Ağacan, Sebastian Graf 
 .. date-accepted:: Leave blank. This will be filled in when the proposal is accepted.
 .. ticket-url:: Leave blank. This will eventually be filled with the
                 ticket URL which will track the progress of the
@@ -15,41 +15,16 @@ Or Patterns
 .. sectnum::
 .. contents::
 
-Instead of spelling out all the trivial cases of a function, we often use wildcards to summarise shared behaviour. This will however become inconvenient once we extend the domain datatype by adding new constructors: the function in question does still compile as the newly added constructor is subsumed in the function's wildcard pattern. This is often unwanted and makes refactoring hard.
+Instead of spelling out all the trivial cases of a function, we often use wildcards to summarise shared behaviour. This will however becomes inconvenient once we extend the domain datatype by adding new constructors: the function in question does still compile as the newly added constructor is subsumed in the function's wildcard pattern. This is often unwanted and makes refactoring hard, because existing tools provide no way to find functions that may need to be adjusted after the new constructor was added. _GHC issue #21572 <https://gitlab.haskell.org/ghc/ghc/-/issues/21572>`_ is a recent example.
 
-We propose a new syntax extension for "or patterns": *an or pattern is
-a list of patterns, none of which matches any variables.* Or patterns are syntactic sugar which support eradicating wildcard patters from your code. Or patterns additionally endorse code reuse as right hand sides can be shared by multiple patterns.
-
-
-Or patterns are ordinary patterns and can appear anywhere that a pattern
-can appear (top-level function argument positions, ``LambdaCase`` patterns,
-left-hand side of ``<-`` in guards etc.)
+We propose a new syntax extension for "or patterns": *an or pattern matches
+a list of patterns, none of which matches any variables.*
+Compared to writing out one clause per pattern, or patterns endorse code reuse of the shared right-hand side.
+Compared to wildcard patterns, or patterns list matched patterns explicitly, to support refactorings in the above sense.
 
 Motivation
 ----------
-
-
-Wildcard (``_``) patterns make code harder to maintain. They essentially mean "match
-every other pattern", which also includes "patterns that may be enabled in the
-future" e.g. when a new constructor is added to a type.
-
-In our experience this is rarely the intention. Usually, when a new constructor
-is added, we need to revisit functions on the type and update them accordingly.
-But if functions use ``_`` patterns this is not easy as we won't be getting any
-compile time warnings about functions we need to update.
-
-This is also against the Haskell way of refactoring programs. Haskell is well
-known for its features that make refactoring easier than most other languages,
-but ``_`` patterns actually make refactoring harder.
-
-As an example, GHC developers would know that adding a new constructor to an
-existing type means many compile-run-edit cycles, with no compile-time help,
-because of ``_`` patterns. Given that by default we don't get stack traces in
-Haskell, and also GHC takes a lot of time to build, this wastes GHC developers'
-time.
-
-Or patterns solve this problem by allowing programmers to explicitly match a
-list of constructors in a concise way. As an example, suppose we had this type:
+Suppose we had this type:
 
 ::
 
@@ -70,9 +45,23 @@ Now suppose that some time later we add a new constructor:
     data T = T1 String | T2 Int | T3 Int | T4 String
 
 We need to update ``stringOfT`` but unfortunately we don't get a warning because
-we used a ``_`` pattern.
+we used a wildcard (``_``) pattern.
 
-Or patterns solve the problem by allowing us to do this:
+Wildcard patterns make code harder to maintain. They essentially mean "match
+every other pattern", which also includes "patterns that may be enabled in the
+future" e.g. when a new constructor is added to a type.
+
+In our experience this is rarely the intention; usually, when a new constructor
+is added, we need to revisit functions on the type and update them accordingly.
+But if functions use ``_`` patterns this is not easy as we won't be getting any
+pattern match warnings about functions we need to update.
+
+As a result, adding a new constructor to an
+existing type means many compile-run-edit cycles, with no compile-time help.
+
+We propose a new language extension, `-XOrPatterns`, to solve this problem by allowing
+programmers to explicitly match a list of constructors in a concise way. For the above
+function we get
 
 ::
 
@@ -80,7 +69,8 @@ Or patterns solve the problem by allowing us to do this:
     stringOfT (T1 s)        = Just s
     stringOfT (T2{} ; T3{}) = Nothing
 
-This function doesn't match ``T4``, so we get our warning.
+This function doesn't match ``T4``, so we get our warning in the very first compile
+cycle or (even faster) in our IDE powered by a language server implementation.
 
 
 Proposed Change Specification
@@ -91,7 +81,7 @@ Changes in the grammar
 
 We consider this as an extension to `Haskell 2010 grammar
 <https://www.haskell.org/onlinereport/haskell2010/haskellch10.html#x17-18000010.5>`_.
-Relevant non-terminal is ``apat``: ::
+The relevant non-terminal is ``apat``: ::
 
   apat    →    var [ @ apat]                     (as pattern)
           |    gcon                              (arity gcon  =  0)
@@ -105,12 +95,11 @@ Relevant non-terminal is ``apat``: ::
 
 Or patterns extension adds one more production: ::
 
- →       |    ( pat1 ; … ; patk )                (or pattern, k ≥ 2)
+          |    ( pat1 ; … ; patk )                (or pattern, k ≥ 2)
 
-The ``;`` between the parenthesis have lower precedence than anything else.
+The ``;`` between the parentheses have (shift) priority that is lower than any other ``apat``'s (reduction) priority.
 
-Or patterns which bind variables are syntactically valid but will be refuted by the renamer.
-
+Or patterns which bind variables are syntactically valid but **will be rejected by the renamer**.
 
 Some examples that this new grammar produces: ::
 
@@ -131,7 +120,7 @@ Some examples that this new grammar produces: ::
   case e1 of
     (((T1 ; T2) ; T3) ; T4) -> e2
 
-The new production doesn't add any ambiguities, because of the parentheses.
+The new production doesn't add any ambiguities because of the mandatory parentheses, just like for tuples.
 
 Semantics of or pattern matching
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -274,7 +263,7 @@ The main effect of or patterns is twofold:
 GADTs & Existential quantification
 ~~~~~~~~~~~~~~~~~
 
-With existential quantification and GADTs, patterns can not only bind values, but also equality constraints, dictionaries and existential type variables. This however does not interfere with or patters in any way - binding variables (or equality constraints etc.) explicitly is a non-goal of this proposal.
+With existential quantification and GADTs, patterns can not only bind values, but also equality constraints, dictionaries and existential type variables. This however does not interfere with or patterns in any way - binding variables (or equality constraints etc.) explicitly is a non-goal of this proposal.
 
 Further extensions
 ~~~~~~~~~~~~~~~~~
@@ -347,20 +336,14 @@ The `parent proposal <https://github.com/ghc-proposals/ghc-proposals/pull/43>`__
  getInt (T1 a ; T2 a) = Just a
  getInt (T3 ; T4) = Nothing
 
-This is a non-goal of this proposal: with binding pattern variables come multiple challenges like binding existential constraints and handling backtracking sensibly. Correctly specifying the semantics is hard and caused the parent proposal to become dormant after no progress has been made.
+This is a non-goal of this proposal: with binding pattern variables come multiple challenges like binding existential constraints and the question of whether and how we would be handling backtracking. Correctly specifying the semantics is hard and caused the parent proposal to become dormant after no progress has been made.
 
 Future proposals could build on the current one and further specify it to eventually allow binding pattern variables.
-
-More
-~~~~~~~~~~~~~~~~~~
-
-Or patterns are just syntactic sugar but don't add any new functionality.
-The trivial alternative therefore is to use view patterns manually to achieve the same thing as or patterns do automatically. 
 
 Unresolved Questions
 --------------------
 
-n.a.
+Not any at this time.
 
 
 Implementation Plan
@@ -370,4 +353,4 @@ The implementation will be done by `@knothed <https://github.com/knothed>`__ and
 Endorsements
 -------------
 
-n.a.
+Not any so far.
